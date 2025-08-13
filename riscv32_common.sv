@@ -379,3 +379,18 @@ function automatic logic [3:0] memory_mask(memory_op op);
         default:                return 4'b1111;
     endcase
 endfunction
+
+function automatic word extract_load_data(word in, word addr, memory_op op); begin
+    logic [1:0] byte_offset = addr[1:0];
+    logic [15:0] halfword;
+    logic [7:0]  bval;
+
+    case (op)
+        memory_b:   return { {24{in[7]}}, in[7:0] };
+        memory_bu:  return { 24'b0, in[7:0] };
+        memory_h:   return { {16{in[15]}}, in[15:0] };
+        memory_hu:  return { 16'b0, in[15:0] };
+        default:    return in;
+    endcase
+end
+endfunction

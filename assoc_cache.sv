@@ -173,11 +173,11 @@ module assoc_cache (
                 if (hit) begin
                     // Read or write hit
                     cache_write_en = 1'b0;
+                    cache_write_line = cache[set_idx][hit_way];
                     if (pending_do_write_next != 4'b0000) begin
                         cache_write_en = 1'b1;
                         cache_write_set = set_idx;
                         cache_write_way = hit_way;
-                        cache_write_line = cache[set_idx][hit_way];
                         for (int i = 0; i < 4; i++) begin
                             if (pending_do_write_next[i])
                                 cache_write_line.data[block_off*8 + i*8 +: 8] = pending_data_next[i*8 +: 8];
@@ -367,18 +367,25 @@ module assoc_cache (
                 end
             end
 
-
+            
             // Debug output
-            $display("[CACHE] Cycle %0t | State: %0d | core_rsp: valid=%0b addr=%08x data=%08x\n",
-                $time, state, core_rsp_valid_q, core_rsp_addr_q, core_rsp_data_q);
+            //$display("[CACHE] Cycle %0t | State: %0d | core_rsp: valid=%0b addr=%08x data=%08x\n",
+                //$time, state, core_rsp_valid_q, core_rsp_addr_q, core_rsp_data_q);
             if (core_req.valid) begin
-                $display("[CACHE] core_req.addr=%08x | tag=%d | set_idx=%d | block_off=%d",
+                $display("[CACHE_REQ] core_req.addr=%08x | tag=%d | set_idx=%d | block_off=%d\n",
                     core_req.addr,
                     core_req.addr[31:BLOCK_OFF_BITS + SET_IDX_BITS],
                     core_req.addr[BLOCK_OFF_BITS + SET_IDX_BITS - 1:BLOCK_OFF_BITS],
                     core_req.addr[BLOCK_OFF_BITS-1:0]
                 );
             end
+            if (core_rsp_valid_q) begin
+                $display("[CACHE_RSP] core_rsp.addr=%08x | rsp_data=%08x\n",
+                    core_rsp_addr_q,
+                    core_rsp_data_q
+                );
+            end
+            
         end
     end
 

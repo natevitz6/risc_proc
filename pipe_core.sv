@@ -192,8 +192,13 @@ always_comb begin
         if (ex_mem_op_q == q_store) begin
             data_mem_req.addr = ex_mem_exec_result[`word_address_size - 1:0];
             data_mem_req.valid = true;
+            //Without cache
             data_mem_req.do_write = shuffle_store_mask(mem_mask, ex_mem_exec_result);
             data_mem_req.data = shuffle_store_data(ex_mem_rd2, ex_mem_exec_result);
+
+            //With cache
+            //data_mem_req.do_write = mem_mask;
+            //data_mem_req.data     = ex_mem_rd2;
         end else if (ex_mem_op_q == q_load) begin
             data_mem_req.addr = ex_mem_exec_result[`word_address_size - 1:0];
             data_mem_req.valid = true;
@@ -210,9 +215,11 @@ always_comb begin
     wbd = mem_wb_exec_result;
 
     if (mem_wb_op_q == q_load) begin
-        wbd = subset_load_data(
-            shuffle_load_data(mem_wb_rsp_data, mem_wb_exec_result),
-            cast_to_memory_op(mem_wb_f3));
+        //With cache
+        //wbd = extract_load_data(mem_wb_rsp_data, mem_wb_exec_result, cast_to_memory_op(mem_wb_f3));
+
+        //Without cache
+        wbd = subset_load_data(shuffle_load_data(mem_wb_rsp_data, mem_wb_exec_result), cast_to_memory_op(mem_wb_f3));
     end
 end
 
@@ -405,25 +412,25 @@ always_ff @(posedge clk) begin
     
     instruction_count <= instruction_count + 1;
     
-    if (instruction_count == 150) begin
+    if (instruction_count == 1100) begin
         //$display("----- Cycle %0t -----", $time);
-        $finish;
+        //$finish;
     end
     
     
-    if (data_mem_req.valid) begin
+    if (data_mem_req.valid && !reset) begin
         $display("----- Cycle %0t -----", $time);
         if (data_mem_req.do_write != 0)
             $display("WRITE: addr=%08x data=%08x pc=%08h\n", data_mem_req.addr, data_mem_req.data, ex_mem_pc);
         else if (data_mem_req.do_read != 0) 
-            $display("Read: addr=%08x data=%08x pc=%08h\n", data_mem_req.addr, data_mem_req.data, ex_mem_pc);
+            $display("READ: addr=%08x data=%08x pc=%08h\n", data_mem_req.addr, data_mem_req.data, ex_mem_pc);
     end
     
-    if (data_mem_rsp.valid) begin
+    if (data_mem_rsp.valid && !reset) begin
         $display("----- Cycle %0t -----", $time);
         $display("RESPONSE : addr=%08x data=%08x pc=%08h\n", data_mem_rsp.addr, data_mem_rsp.data, ex_mem_pc);
     end
-    /*
+    
     if (!reset) begin
         $display("forwA %08h, forwB %08h, imm %08h, pc %08h, op_q %0d, f3 %0d, f7 %0d",    
             forward_data_a, forward_data_b, id_ex_imm, id_ex_pc, id_ex_op_q, id_ex_f3, id_ex_f7);
@@ -480,7 +487,7 @@ always_ff @(posedge clk) begin
         $display("-------------------------------\n");   
         
     end   
-    */
+    
     
 end
 

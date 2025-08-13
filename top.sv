@@ -36,29 +36,29 @@ core core (
     .data_mem_rsp(data_mem_rsp_to_core)
 );
 
-
+/*
 assoc_cache assoc_cache (
     .clk(clk),
     .reset(reset),
     .core_req(data_mem_req_from_core),    // Core -> Cache
     .core_rsp(data_mem_rsp_to_core),      // Cache -> Core
-    .mem_req(data_mem_req),       // Cache -> Memory
-    .mem_rsp(data_mem_rsp)      // Memory -> Cache
+    .mem_req(data_mem_req_from_cache),       // Cache -> Delay
+    .mem_rsp(data_mem_rsp_to_cache)      // Delay -> Cache
 );
+*/
 
-/*
 block_delay #(
     .N(3)
 ) delay (
     .clk(clk),
     .reset(reset),
-    .from_core(data_mem_req_from_cache),
-    .to_core(data_mem_rsp_to_cache),
+    .from_core(data_mem_req_from_core),
+    .to_core(data_mem_rsp_to_core),
     .to_memory(data_mem_req),
     .from_memory(data_mem_rsp)
 );
 
-
+/*
 always_ff @(posedge clk) begin
     if (!reset && inst_mem_req.do_read != 0) begin
         //$display("[%d] inst address: %x", inst_mem_req.user_tag, inst_mem_req.addr);
@@ -104,9 +104,9 @@ end
 /*
 always_ff @(posedge clk) begin
     if (data_mem_req.valid && data_mem_req.do_write != 0)
-        $display("%x write: %x do_write: %x data: %x", inst_mem_req.addr, data_mem_req.addr, data_mem_req.do_write, data_mem_req.data);
+        $display("[MEMORY] %x write: %x do_write: %x data: %x", inst_mem_req.addr, data_mem_req.addr, data_mem_req.do_write, data_mem_req.data);
     if (data_mem_req.valid && data_mem_req.do_read != 0)
-        $display("%x read: %x do_read:", inst_mem_req.addr, data_mem_req.addr, data_mem_req.do_read);
+        $display("[MEMORY] %x read: %x do_read:", inst_mem_req.addr, data_mem_req.addr, data_mem_req.do_read);
 
 end
 */

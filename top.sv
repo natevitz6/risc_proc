@@ -21,8 +21,8 @@ memory_io_req data_mem_req_from_cache;
 memory_io_rsp data_mem_rsp_to_cache;
 memory_io_req data_mem_req_from_core;
 memory_io_rsp data_mem_rsp_to_core;
-memory_io_req data_mem_req_from_pf;
-memory_io_rsp data_mem_rsp_to_pf;
+memory_io_req data_mem_req_from_delay;
+memory_io_rsp data_mem_rsp_to_delay;
 memory_io_req data_mem_req;
 memory_io_rsp data_mem_rsp;
 
@@ -36,24 +36,35 @@ core core (
     .data_mem_rsp(data_mem_rsp_to_core)
 );
 
-/*
-assoc_cache assoc_cache (
-    .clk(clk),
-    .reset(reset),
-    .core_req(data_mem_req_from_core),    // Core -> Cache
-    .core_rsp(data_mem_rsp_to_core),      // Cache -> Core
-    .mem_req(data_mem_req_from_cache),       // Cache -> Delay
-    .mem_rsp(data_mem_rsp_to_cache)      // Delay -> Cache
-);
-*/
-
 block_delay #(
-    .N(3)
-) delay (
+    .N(1)
+) core_cache_delay (
     .clk(clk),
     .reset(reset),
     .from_core(data_mem_req_from_core),
     .to_core(data_mem_rsp_to_core),
+    .to_memory(data_mem_req_from_delay),
+    .from_memory(data_mem_rsp_to_delay)
+);
+
+
+assoc_cache assoc_cache (
+    .clk(clk),
+    .reset(reset),
+    .core_req(data_mem_req_from_delay),    // Core -> Cache
+    .core_rsp(data_mem_rsp_to_delay),      // Cache -> Core
+    .mem_req(data_mem_req_from_cache),       // Cache -> Delay
+    .mem_rsp(data_mem_rsp_to_cache)      // Delay -> Cache
+);
+
+
+block_delay #(
+    .N(20)
+) cache_mem_delay (
+    .clk(clk),
+    .reset(reset),
+    .from_core(data_mem_req_from_cache),
+    .to_core(data_mem_rsp_to_cache),
     .to_memory(data_mem_req),
     .from_memory(data_mem_rsp)
 );

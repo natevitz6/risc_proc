@@ -21,8 +21,14 @@ memory_io_req data_mem_req_from_cache;
 memory_io_rsp data_mem_rsp_to_cache;
 memory_io_req data_mem_req_from_core;
 memory_io_rsp data_mem_rsp_to_core;
-memory_io_req data_mem_req_from_delay;
-memory_io_rsp data_mem_rsp_to_delay;
+memory_io_req data_mem_req_from_core_delay;
+memory_io_rsp data_mem_rsp_to_core_delay;
+memory_io_req data_mem_req_from_l1;
+memory_io_rsp data_mem_rsp_to_l1;
+memory_io_req data_mem_req_from_l1_delay;
+memory_io_rsp data_mem_rsp_to_l1_delay;
+memory_io_req data_mem_req_from_l2;
+memory_io_rsp data_mem_rsp_to_l2;
 memory_io_req data_mem_req;
 memory_io_rsp data_mem_rsp;
 
@@ -43,28 +49,57 @@ block_delay #(
     .reset(reset),
     .from_core(data_mem_req_from_core),
     .to_core(data_mem_rsp_to_core),
-    .to_memory(data_mem_req_from_delay),
-    .from_memory(data_mem_rsp_to_delay)
+    .to_memory(data_mem_req_from_core_delay),
+    .from_memory(data_mem_rsp_to_core_delay)
 );
 
 
-assoc_cache assoc_cache (
+assoc_cache #(
+    .CACHE_SIZE_BYTES(2048),
+    .BLOCK_SIZE_BYTES(32),
+    .ASSOC(4)
+) L1_cache (
     .clk(clk),
     .reset(reset),
-    .core_req(data_mem_req_from_delay),    // Core -> Cache
-    .core_rsp(data_mem_rsp_to_delay),      // Cache -> Core
-    .mem_req(data_mem_req_from_cache),       // Cache -> Delay
-    .mem_rsp(data_mem_rsp_to_cache)      // Delay -> Cache
+    .core_req(data_mem_req_from_core_delay),    // Core -> Cache
+    .core_rsp(data_mem_rsp_to_core_delay),      // Cache -> Core
+    .mem_req(data_mem_req_from_l1),     // L1 -> Delay
+    .mem_rsp(data_mem_rsp_to_l1)        // Delay -> L1
+);
+
+
+block_delay #(
+    .N(5)
+) L1_L2_delay (
+    .clk(clk),
+    .reset(reset),
+    .from_core(data_mem_req_from_l1),
+    .to_core(data_mem_rsp_to_l1),
+    .to_memory(data_mem_req_from_l1_delay),
+    .from_memory(data_mem_rsp_to_l1_delay)
+);
+
+assoc_cache #(
+    .CACHE_SIZE_BYTES(8192),
+    .BLOCK_SIZE_BYTES(32),
+    .ASSOC(8)
+) L2_cache (
+    .clk(clk),
+    .reset(reset),
+    .core_req(data_mem_req_from_l1_delay),    // L1_delay -> L2
+    .core_rsp(data_mem_rsp_to_l1_delay),      // L2 -> L1_delay
+    .mem_req(data_mem_req_from_l2),     // L2 -> L2_Delay
+    .mem_rsp(data_mem_rsp_to_l2)        // L2_Delay -> L2
 );
 
 
 block_delay #(
     .N(20)
-) cache_mem_delay (
+) L2_mem_delay (
     .clk(clk),
     .reset(reset),
-    .from_core(data_mem_req_from_cache),
-    .to_core(data_mem_rsp_to_cache),
+    .from_core(data_mem_req_from_l2),
+    .to_core(data_mem_rsp_to_l2),
     .to_memory(data_mem_req),
     .from_memory(data_mem_rsp)
 );

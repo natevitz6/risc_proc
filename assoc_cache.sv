@@ -4,7 +4,11 @@
 `include "system.sv"
 `include "memory_io.sv"
 
-module assoc_cache (
+module assoc_cache #(
+    parameter int CACHE_SIZE_BYTES = 2048,
+    parameter int BLOCK_SIZE_BYTES = 32,
+    parameter int ASSOC           = 4
+) (
     input  logic clk,
     input  logic reset,
     input  memory_io_req core_req,
@@ -13,25 +17,24 @@ module assoc_cache (
     input  memory_io_rsp mem_rsp
 );
 
-    // Cache parameters
-    localparam CACHE_SIZE_BYTES = 2048;
-    localparam BLOCK_SIZE_BYTES = 32;
-    localparam ASSOC           = 4;
-    localparam NUM_SETS        = CACHE_SIZE_BYTES / (BLOCK_SIZE_BYTES * ASSOC); // 16
-    localparam SET_IDX_BITS    = 4;  // log2(NUM_SETS)
-    localparam BLOCK_OFF_BITS  = 5;  // log2(BLOCK_SIZE_BYTES)
-    localparam TAG_BITS        = 32 - SET_IDX_BITS - BLOCK_OFF_BITS;
+    // Derived parameters
+    localparam int NUM_SETS       = CACHE_SIZE_BYTES / (BLOCK_SIZE_BYTES * ASSOC);
+    localparam int SET_IDX_BITS   = $clog2(NUM_SETS);
+    localparam int BLOCK_OFF_BITS = $clog2(BLOCK_SIZE_BYTES);
+    localparam int TAG_BITS       = 32 - SET_IDX_BITS - BLOCK_OFF_BITS;
+    localparam int WAY_IDX_BITS   = $clog2(ASSOC);
 
     typedef logic [BLOCK_OFF_BITS-1:0] block_off_t;
     typedef logic [SET_IDX_BITS-1:0]   set_idx_t;
     typedef logic [TAG_BITS-1:0]       tag_val_t;
+    typedef logic [WAY_IDX_BITS-1:0]   way_idx_t;
 
     typedef struct packed {
         logic                 valid;
         logic                 dirty;
         tag_val_t             tag_val;
         logic [255:0]         data; // 32 bytes = 256 bits
-        logic [1:0]           lru;  // 2 bits for LRU (0 = MRU, 3 = LRU)
+        way_idx_t           lru;  // 2 bits for LRU (0 = MRU, 3 = LRU)
     } cache_line_t;
 
     cache_line_t cache [NUM_SETS][ASSOC];
@@ -91,27 +94,27 @@ module assoc_cache (
 
     // Hit/miss, LRU, and cache write signals
     logic hit;
-    logic [1:0] hit_way, replace_way, lru_way;
+    way_idx_t hit_way, replace_way, lru_way;
 
     // Cache write enables and data
     logic cache_write_en;
     logic [SET_IDX_BITS-1:0] cache_write_set;
-    logic [1:0] cache_write_way;
+    way_idx_t cache_write_way;
     cache_line_t cache_write_line;
 
     // LRU update enables and data
-    logic [1:0] lru_next [NUM_SETS][ASSOC];
+    way_idx_t lru_next [NUM_SETS][ASSOC];
 
     // Combinational logic for hit/miss, LRU, and next actions
     always_comb begin
         // Defaults
         hit = 1'b0;
-        hit_way = 2'b00;
-        lru_way = 2'b00;
-        replace_way = 2'b00;
+        hit_way = '0;
+        lru_way = '0;
+        replace_way = '0;
         cache_write_en = 1'b0;
         cache_write_set = set_idx;
-        cache_write_way = 2'b00;
+        cache_write_way = '0;
         cache_write_line = '0;
         wb_word_cnt_next = wb_word_cnt;
         wb_addr_next = wb_addr;
@@ -126,14 +129,14 @@ module assoc_cache (
         for (int i = 0; i < ASSOC; i++) begin
             if (cache[set_idx][i].valid && cache[set_idx][i].tag_val == tag_val) begin
                 hit = 1'b1;
-                hit_way = i[1:0];
+                hit_way = way_idx_t'(i);
             end
         end
 
         // LRU replacement
         for (int i = 0; i < ASSOC; i++) begin
-            if (cache[set_idx][i].lru == 2'b11)
-                lru_way = i[1:0];
+            if (cache[set_idx][i].lru == way_idx_t'(ASSOC-1))
+                lru_way = way_idx_t'(i);
         end
         replace_way = lru_way;
 
@@ -186,9 +189,9 @@ module assoc_cache (
                     end
                     // On a hit in LOOKUP state
                     for (int w = 0; w < ASSOC; w++) begin
-                        if (w[1:0] == hit_way) begin
+                        if (way_idx_t'(w) == hit_way) begin
                             // MRU gets 0
-                            lru_next[set_idx][w] = 2'd0;
+                            lru_next[set_idx][w] = '0;
                         end
                         else if (cache[set_idx][w].lru < cache[set_idx][hit_way].lru) begin
                             // Ways less recently used than the hit are bumped up
@@ -241,7 +244,7 @@ module assoc_cache (
                         // Done with write-back, start block fill
                         wb_word_cnt_next = 0;
                         wb_addr_next = 0;
-                        wb_active_next = 1'b0;
+                        wb_active_next = 0;
                         block_buffer_next = 0;
                         word_cnt_next = 0;
                         block_base_addr_next = {pending_addr_next[31:5], 5'b0};
@@ -293,10 +296,12 @@ module assoc_cache (
                 cache_write_line.tag_val = tag_val;
                 cache_write_line.data = block_buffer;
                 for (int w = 0; w < ASSOC; w++) begin
-                    if (w[1:0] == replace_way)
-                        lru_next[set_idx][w] = 2'd0;
-                    else if (cache[set_idx][w].lru < cache[set_idx][replace_way].lru)
+                    if (way_idx_t'(w) == replace_way) begin
+                        lru_next[set_idx][w] = '0;
+                    end
+                    else if (cache[set_idx][w].lru < cache[set_idx][replace_way].lru) begin
                         lru_next[set_idx][w] = cache[set_idx][w].lru + 1;
+                    end
                 end
                 // If this was a write, perform the write now using pending values
                 if (pending_do_write != 4'b0000) begin
@@ -325,7 +330,7 @@ module assoc_cache (
             core_rsp_valid_q <= 1'b0;
             for (int i = 0; i < NUM_SETS; i++)
                 for (int j = 0; j < ASSOC; j++)
-                    cache[i][j] <= '{valid: 0, dirty: 0, tag_val: 0, data: 0, lru: j[1:0]};
+                    cache[i][j] = '{valid: 0, dirty: 0, tag_val: 0, data: 0, lru: way_idx_t'(j)};
             block_buffer <= 0;
             word_cnt <= 0;
             block_base_addr <= 0;
@@ -363,11 +368,10 @@ module assoc_cache (
             // LRU update if enabled
             for (int s = 0; s < NUM_SETS; s++) begin
                 for (int w = 0; w < ASSOC; w++) begin
-                    cache[s][w].lru <= lru_next[s][w];
+                    cache[s][w].lru = lru_next[s][w];
                 end
             end
 
-            
             // Debug output
             //$display("[CACHE] Cycle %0t | State: %0d | core_rsp: valid=%0b addr=%08x data=%08x\n",
                 //$time, state, core_rsp_valid_q, core_rsp_addr_q, core_rsp_data_q);

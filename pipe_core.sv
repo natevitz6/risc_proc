@@ -193,12 +193,12 @@ always_comb begin
             data_mem_req.addr = ex_mem_exec_result[`word_address_size - 1:0];
             data_mem_req.valid = true;
             //Without cache
-            data_mem_req.do_write = shuffle_store_mask(mem_mask, ex_mem_exec_result);
-            data_mem_req.data = shuffle_store_data(ex_mem_rd2, ex_mem_exec_result);
+            //data_mem_req.do_write = shuffle_store_mask(mem_mask, ex_mem_exec_result);
+            //data_mem_req.data = shuffle_store_data(ex_mem_rd2, ex_mem_exec_result);
 
             //With cache
-            //data_mem_req.do_write = mem_mask;
-            //data_mem_req.data     = ex_mem_rd2;
+            data_mem_req.do_write = mem_mask;
+            data_mem_req.data     = ex_mem_rd2;
         end else if (ex_mem_op_q == q_load) begin
             data_mem_req.addr = ex_mem_exec_result[`word_address_size - 1:0];
             data_mem_req.valid = true;
@@ -216,10 +216,10 @@ always_comb begin
 
     if (mem_wb_op_q == q_load) begin
         //With cache
-        //wbd = extract_load_data(mem_wb_rsp_data, mem_wb_exec_result, cast_to_memory_op(mem_wb_f3));
+        wbd = extract_load_data(mem_wb_rsp_data, mem_wb_exec_result, cast_to_memory_op(mem_wb_f3));
 
         //Without cache
-        wbd = subset_load_data(shuffle_load_data(mem_wb_rsp_data, mem_wb_exec_result), cast_to_memory_op(mem_wb_f3));
+        //wbd = subset_load_data(shuffle_load_data(mem_wb_rsp_data, mem_wb_exec_result), cast_to_memory_op(mem_wb_f3));
     end
 end
 

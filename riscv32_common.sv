@@ -1,4 +1,7 @@
 
+`ifndef _RISCV32_COMMON_SV
+`define _RISCV32_COMMON_SV
+
 `define enable_ext_m        1
 `define tag_size            5
 
@@ -89,9 +92,12 @@ function automatic f3_ext_m_op cast_to_ext_m(funct3 in);
     return f3_ext_m_op'(in);
 endfunction
 
-
 function automatic opcode decode_opcode(instr32 instr);
     return instr[6:0];
+endfunction
+
+function automatic bool decode_vector_op(opcode in);
+    return (in == 7'b1010111) || (in == 7'b0000111) || (in == 7'b0100111);
 endfunction
 
 function automatic logic [`word_size-1:0] decode_imm(instr32 instr, instr_format format);
@@ -394,3 +400,5 @@ function automatic word extract_load_data(word in, word addr, memory_op op); beg
     endcase
 end
 endfunction
+
+`endif

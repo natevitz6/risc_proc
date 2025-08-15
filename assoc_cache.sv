@@ -66,6 +66,8 @@ module assoc_cache #(
     logic [31:0] core_rsp_data_q, core_rsp_data_d;
     logic [31:0] core_rsp_addr_q, core_rsp_addr_d;
     logic [`user_tag_size-1:0] core_rsp_user_tag_q, core_rsp_user_tag_d;
+    logic [127:0] core_rsp_vector_data_q, core_rsp_vector_data_d; // For vector responses
+    logic         core_rsp_is_vector_q, core_rsp_is_vector_d;
 
     // Core request logic
     logic [31:0] pending_addr, pending_addr_next;
@@ -73,6 +75,8 @@ module assoc_cache #(
     logic [3:0]  pending_do_write, pending_do_write_next;
     logic [`user_tag_size-1:0] pending_user_tag, pending_user_tag_next;
     logic        pending_valid, pending_valid_next;
+    logic        pending_is_vector, pending_is_vector_next;
+    logic [127:0] pending_vector_data, pending_vector_data_next;
 
     assign core_rsp = '{
         addr: core_rsp_addr_q,
@@ -80,7 +84,9 @@ module assoc_cache #(
         valid: core_rsp_valid_q,
         ready: 1'b1,
         dummy: 2'b00,
-        user_tag: core_rsp_user_tag_q
+        user_tag: core_rsp_user_tag_q,
+        is_vector: core_rsp_is_vector_q,
+        vector_data: core_rsp_vector_data_q
     };
 
     // Memory request logic
@@ -124,6 +130,8 @@ module assoc_cache #(
         pending_do_write_next  = pending_do_write;
         pending_user_tag_next  = pending_user_tag;
         pending_valid_next     = pending_valid;
+        pending_is_vector_next = pending_is_vector;
+        pending_vector_data_next = pending_vector_data;
 
         // Hit detection and block_data
         for (int i = 0; i < ASSOC; i++) begin
@@ -147,6 +155,8 @@ module assoc_cache #(
         core_rsp_data_d = 32'b0;
         core_rsp_addr_d = 32'b0;
         core_rsp_user_tag_d = core_req.user_tag;
+        core_rsp_vector_data_d = 128'b0;
+        core_rsp_is_vector_d = 1'b0;
         block_buffer_next = block_buffer;
         word_cnt_next = word_cnt;
         block_base_addr_next = block_base_addr;
@@ -168,56 +178,82 @@ module assoc_cache #(
                     pending_do_write_next  = core_req.do_write;
                     pending_user_tag_next  = core_req.user_tag;
                     pending_valid_next     = 1'b1;
+                    pending_is_vector_next = core_req.is_vector;
+                    pending_vector_data_next = core_req.vector_data;
                 end else begin
                     pending_valid_next = 1'b0;
                 end
             end
             LOOKUP: begin
                 if (hit) begin
-                    // Read or write hit
                     cache_write_en = 1'b0;
                     cache_write_line = cache[set_idx][hit_way];
-                    if (pending_do_write_next != 4'b0000) begin
-                        cache_write_en = 1'b1;
-                        cache_write_set = set_idx;
-                        cache_write_way = hit_way;
-                        for (int i = 0; i < 4; i++) begin
-                            if (pending_do_write_next[i])
-                                cache_write_line.data[block_off*8 + i*8 +: 8] = pending_data_next[i*8 +: 8];
+                    // Vector operation
+                    if (pending_is_vector) begin
+                        // Vector store
+                        if (pending_do_write_next != 4'b0000) begin
+                            cache_write_en = 1'b1;
+                            cache_write_set = set_idx;
+                            cache_write_way = hit_way;
+                            // Write entire vector (128 bits) into cache line
+                            for (int i = 0; i < 16; i++) begin
+                                cache_write_line.data[i*8 +: 8] = pending_vector_data_next[i*8 +: 8];
+                            end
+                            cache_write_line.dirty = 1'b1;
                         end
-                        cache_write_line.dirty = 1'b1;
+                        // Vector load
+                        core_rsp_valid_d = 1'b1;
+                        core_rsp_addr_d = pending_addr_next;
+                        core_rsp_user_tag_d = pending_user_tag_next;
+                        core_rsp_is_vector_d = 1'b1;
+                        // Read entire vector (128 bits) from cache line
+                        for (int i = 0; i < 16; i++) begin
+                            core_rsp_vector_data_d[i*8 +: 8] = cache[set_idx][hit_way].data[i*8 +: 8];
+                        end
+                        core_rsp_data_d = 32'b0;
+                        next_state = IDLE;
+                        pending_valid_next = 1'b0;
+                    end else begin
+                        // Scalar operation (existing logic)
+                        if (pending_do_write_next != 4'b0000) begin
+                            cache_write_en = 1'b1;
+                            cache_write_set = set_idx;
+                            cache_write_way = hit_way;
+                            for (int i = 0; i < 4; i++) begin
+                                if (pending_do_write_next[i])
+                                    cache_write_line.data[block_off*8 + i*8 +: 8] = pending_data_next[i*8 +: 8];
+                            end
+                            cache_write_line.dirty = 1'b1;
+                        end
+                        for (int w = 0; w < ASSOC; w++) begin
+                            if (way_idx_t'(w) == hit_way) begin
+                                lru_next[set_idx][w] = '0;
+                            end
+                            else if (cache[set_idx][w].lru < cache[set_idx][hit_way].lru) begin
+                                lru_next[set_idx][w] = cache[set_idx][w].lru + 1;
+                            end
+                        end
+                        core_rsp_valid_d = 1'b1;
+                        core_rsp_data_d = cache_write_line.data[block_off*8 +: 32];
+                        core_rsp_addr_d = pending_addr_next;
+                        core_rsp_user_tag_d = pending_user_tag_next;
+                        core_rsp_is_vector_d = 1'b0;
+                        core_rsp_vector_data_d = 128'b0;
+                        next_state = IDLE;
+                        pending_valid_next = 1'b0;
                     end
-                    // On a hit in LOOKUP state
-                    for (int w = 0; w < ASSOC; w++) begin
-                        if (way_idx_t'(w) == hit_way) begin
-                            // MRU gets 0
-                            lru_next[set_idx][w] = '0;
-                        end
-                        else if (cache[set_idx][w].lru < cache[set_idx][hit_way].lru) begin
-                            // Ways less recently used than the hit are bumped up
-                            lru_next[set_idx][w] = cache[set_idx][w].lru + 1;
-                        end
-                    end
-                    // Respond to core
-                    core_rsp_valid_d = 1'b1;
-                    core_rsp_data_d = cache_write_line.data[block_off*8 +: 32];
-                    core_rsp_addr_d = pending_addr_next;
-                    next_state = IDLE;
-                    pending_valid_next = 1'b0;
                 end else begin
-                    // Miss: check if replacement way is dirty
+                    // Miss: go to writeback or fill
                     if (cache[set_idx][replace_way].valid && cache[set_idx][replace_way].dirty) begin
-                        // Start write-back FSM
+                        next_state = MISS_WRITEBACK;
                         wb_word_cnt_next = 0;
                         wb_addr_next = {cache[set_idx][replace_way].tag_val, set_idx, {BLOCK_OFF_BITS{1'b0}}};
                         wb_active_next = 1'b1;
-                        next_state = MISS_WRITEBACK;
                     end else begin
-                        // No write-back needed, start block fill
-                        block_buffer_next = 0;
-                        word_cnt_next = 0;
-                        block_base_addr_next = {pending_addr_next[31:5], 5'b0};
                         next_state = MISS_START_FILL;
+                        block_base_addr_next = {pending_addr_next[31:5], 5'b0};
+                        word_cnt_next = 0;
+                        block_buffer_next = 0;
                     end
                 end
             end
@@ -230,7 +266,9 @@ module assoc_cache #(
                     do_write: 4'b1111,
                     valid: 1'b1,
                     dummy: 3'b000,
-                    user_tag: pending_user_tag_next
+                    user_tag: pending_user_tag_next,
+                    is_vector: 1'b0,
+                    vector_data: 128'b0
                 };
                 next_state = MISS_WRITEBACK_WAIT;
             end
@@ -241,7 +279,6 @@ module assoc_cache #(
                         wb_addr_next = wb_addr + 32'd4;
                         next_state = MISS_WRITEBACK;
                     end else begin
-                        // Done with write-back, start block fill
                         wb_word_cnt_next = 0;
                         wb_addr_next = 0;
                         wb_active_next = 0;
@@ -253,31 +290,51 @@ module assoc_cache #(
                 end
             end
             MISS_START_FILL: begin
-                mem_req_r = '{
-                    addr: block_base_addr,
-                    data: 32'b0,
-                    do_read: 4'b1111,
-                    do_write: 4'b0000,
-                    valid: 1'b1,
-                    dummy: 3'b000,
-                    user_tag: pending_user_tag_next
-                };
+                if (pending_valid && pending_is_vector) begin
+                    mem_req_r = '{
+                        addr: block_base_addr_next,
+                        data: 32'b0,
+                        do_read: 4'b1111,
+                        do_write: 4'b0000,
+                        valid: 1'b1,
+                        dummy: 3'b000,
+                        user_tag: pending_user_tag,
+                        is_vector: 1'b1,
+                        vector_data: 128'b0
+                    };
+                end else begin
+                    mem_req_r = '{
+                        addr: block_base_addr_next,
+                        data: 32'b0,
+                        do_read: 4'b1111,
+                        do_write: 4'b0000,
+                        valid: 1'b1,
+                        dummy: 3'b000,
+                        user_tag: pending_user_tag_next,
+                        is_vector: 1'b0,
+                        vector_data: 128'b0
+                    };
+                end
                 next_state = MISS_FILL_WAIT;
             end
             MISS_FILL_WAIT: begin
-                if (mem_rsp.valid) begin
-                    block_buffer_next = block_buffer;
+                if (pending_valid && pending_is_vector && mem_rsp.valid && mem_rsp.is_vector) begin
+                    block_buffer_next[0 +: 128] = mem_rsp.vector_data;
+                    next_state = MISS_FILL_DONE;
+                end else if (mem_rsp.valid) begin
                     block_buffer_next[word_cnt*32 +: 32] = mem_rsp.data;
                     if (word_cnt < 7) begin
                         word_cnt_next = word_cnt + 1;
                         mem_req_r = '{
-                            addr: block_base_addr + (32'(word_cnt_next) << 2),
+                            addr: block_base_addr_next + (32'(word_cnt_next) << 2),
                             data: 32'b0,
                             do_read: 4'b1111,
                             do_write: 4'b0000,
                             valid: 1'b1,
                             dummy: 3'b000,
-                            user_tag: pending_user_tag_next
+                            user_tag: pending_user_tag_next,
+                            is_vector: 1'b0,
+                            vector_data: 128'b0
                         };
                         next_state = MISS_FILL_WAIT;
                     end else begin
@@ -286,7 +343,6 @@ module assoc_cache #(
                 end
             end
             MISS_FILL_DONE: begin
-                // Fill the cache line
                 cache_write_en = 1'b1;
                 cache_write_set = set_idx;
                 cache_write_way = replace_way;
@@ -294,7 +350,7 @@ module assoc_cache #(
                 cache_write_line.valid = 1'b1;
                 cache_write_line.dirty = 1'b0;
                 cache_write_line.tag_val = tag_val;
-                cache_write_line.data = block_buffer;
+                cache_write_line.data = block_buffer_next;
                 for (int w = 0; w < ASSOC; w++) begin
                     if (way_idx_t'(w) == replace_way) begin
                         lru_next[set_idx][w] = '0;
@@ -303,19 +359,40 @@ module assoc_cache #(
                         lru_next[set_idx][w] = cache[set_idx][w].lru + 1;
                     end
                 end
+
                 // If this was a write, perform the write now using pending values
-                if (pending_do_write != 4'b0000) begin
+                if (pending_do_write != 4'b0000 && !pending_is_vector) begin
                     for (int i = 0; i < 4; i++) begin
                         if (pending_do_write[i])
                             cache_write_line.data[pending_addr[4:0]*8 + i*8 +: 8] = pending_data[i*8 +: 8];
                     end
                     cache_write_line.dirty = 1'b1;
                 end
-                // Respond to core with the correct data (read or write)
-                core_rsp_valid_d = 1'b1;
-                core_rsp_data_d = cache_write_line.data[pending_addr[4:0]*8 +: 32];
-                core_rsp_addr_d = pending_addr;
-                core_rsp_user_tag_d = pending_user_tag;
+
+                // For vector store after fill, if needed:
+                if (pending_is_vector && pending_do_write_next != 4'b0000) begin
+                    for (int i = 0; i < 16; i++) begin
+                        cache_write_line.data[i*8 +: 8] = pending_vector_data_next[i*8 +: 8];
+                    end
+                    cache_write_line.dirty = 1'b1;
+                end
+
+                // Respond to core with the correct data
+                if (pending_valid && pending_is_vector) begin
+                    core_rsp_valid_d = 1'b1;
+                    core_rsp_addr_d = pending_addr_next;
+                    core_rsp_user_tag_d = pending_user_tag_next;
+                    core_rsp_is_vector_d = 1'b1;
+                    core_rsp_vector_data_d = block_buffer_next[0 +: 128];
+                    core_rsp_data_d = 32'b0;
+                end else begin
+                    core_rsp_valid_d = 1'b1;
+                    core_rsp_data_d = block_buffer_next[block_off*8 +: 32];
+                    core_rsp_addr_d = pending_addr_next;
+                    core_rsp_user_tag_d = pending_user_tag_next;
+                    core_rsp_is_vector_d = 1'b0;
+                    core_rsp_vector_data_d = 128'b0;
+                end
                 next_state = IDLE;
                 pending_valid_next = 1'b0;
             end
@@ -340,17 +417,23 @@ module assoc_cache #(
             core_rsp_data_q <= 0;
             core_rsp_addr_q <= 0;
             core_rsp_user_tag_q <= 0;
+            core_rsp_vector_data_q <= 0;
+            core_rsp_is_vector_q <= 0;
             pending_addr      <= 0;
             pending_data      <= 0;
             pending_do_write  <= 0;
             pending_user_tag  <= 0;
             pending_valid     <= 0;
+            pending_is_vector <= 0;
+            pending_vector_data <= 0;
         end else begin
             state <= next_state;
             core_rsp_valid_q <= core_rsp_valid_d;
             core_rsp_data_q <= core_rsp_data_d;
             core_rsp_addr_q <= core_rsp_addr_d;
             core_rsp_user_tag_q <= core_rsp_user_tag_d;
+            core_rsp_vector_data_q <= core_rsp_vector_data_d;
+            core_rsp_is_vector_q <= core_rsp_is_vector_d;
             block_buffer <= block_buffer_next;
             word_cnt <= word_cnt_next;
             block_base_addr <= block_base_addr_next;
@@ -362,6 +445,8 @@ module assoc_cache #(
             pending_do_write  <= pending_do_write_next;
             pending_user_tag  <= pending_user_tag_next;
             pending_valid     <= pending_valid_next;
+            pending_is_vector <= pending_is_vector_next;
+            pending_vector_data <= pending_vector_data_next;
             // Write to cache if enabled
             if (cache_write_en)
                 cache[cache_write_set][cache_write_way] <= cache_write_line;
@@ -372,7 +457,8 @@ module assoc_cache #(
                 end
             end
 
-            // Debug output
+
+            /* Debug output
             //$display("[CACHE] Cycle %0t | State: %0d | core_rsp: valid=%0b addr=%08x data=%08x\n",
                 //$time, state, core_rsp_valid_q, core_rsp_addr_q, core_rsp_data_q);
             if (core_req.valid) begin
@@ -389,7 +475,8 @@ module assoc_cache #(
                     core_rsp_data_q
                 );
             end
-            
+            */
+
         end
     end
 

@@ -29,8 +29,6 @@ module memory32 #(
     reg [7:0]   data3[0:size/4 - 1];
 
     initial begin
-        // Vivado simulation fills the BRAM with X's and this makes a complete mess of
-        // branch mis-predictions that come from the processor.
         for (int i = 0; i < size/4; i++) begin
             data0[i] = 8'd0;
             data1[i] = 8'd0;
@@ -50,26 +48,70 @@ module memory32 #(
         rsp <= memory_io_no_rsp32;
         if (req.valid) begin
             rsp.user_tag <= req.user_tag;
-            if (is_any_byte32(req.do_read)) begin
-                if (enable_rsp_addr)
-                    rsp.addr <= req.addr;
-                rsp.valid <= 1'b1;
-                rsp.user_tag <= req.user_tag;
-                rsp.data[7:0] <= data0[req.addr[size_l2 - 1:2]];
-                rsp.data[15:8] <= data1[req.addr[size_l2 - 1:2]];
-                rsp.data[23:16] <= data2[req.addr[size_l2 - 1:2]];
-                rsp.data[31:24] <= data3[req.addr[size_l2 - 1:2]];
-            end else if (is_any_byte32(req.do_write)) begin
-                if (enable_rsp_addr)
-                    rsp.addr <= req.addr;
-                rsp.valid <= 1'b1;
-                rsp.user_tag <= req.user_tag;
-                if (req.do_write[0]) data0[req.addr[size_l2 - 1:2]] <= req.data[7:0];
-                if (req.do_write[1]) data1[req.addr[size_l2 - 1:2]] <= req.data[15:8];
-                if (req.do_write[2]) data2[req.addr[size_l2 - 1:2]] <= req.data[23:16];
-                if (req.do_write[3]) data3[req.addr[size_l2 - 1:2]] <= req.data[31:24];
-            end else begin
-                rsp.valid <= 1'b0;
+            rsp.is_vector <= req.is_vector;
+            if (req.is_vector) begin
+                // Vector load
+                if (is_any_byte32(req.do_read)) begin
+                    if (enable_rsp_addr)
+                        rsp.addr <= req.addr;
+                    rsp.valid <= 1'b1;
+                    rsp.user_tag <= req.user_tag;
+                    // Read 16 bytes (128 bits) starting at req.addr, assuming alignment
+                    for (int i = 0; i < 16; i++) begin
+                        int idx = (req.addr + i) >> 2;
+                        int byte_offset = (req.addr + i) & 32'h3; // Fix: use 32'h3 for 32-bit width
+                        case (byte_offset)
+                            32'h0: rsp.vector_data[i*8 +: 8] <= data0[idx];
+                            32'h1: rsp.vector_data[i*8 +: 8] <= data1[idx];
+                            32'h2: rsp.vector_data[i*8 +: 8] <= data2[idx];
+                            32'h3: rsp.vector_data[i*8 +: 8] <= data3[idx];
+                        endcase
+                    end
+                end
+                // Vector store
+                else if (is_any_byte32(req.do_write)) begin
+                    if (enable_rsp_addr)
+                        rsp.addr <= req.addr;
+                    rsp.valid <= 1'b1;
+                    rsp.user_tag <= req.user_tag;
+                    // Write 16 bytes (128 bits) starting at req.addr, assuming alignment
+                    for (int i = 0; i < 16; i++) begin
+                        int idx = (req.addr + i) >> 2;
+                        int byte_offset = (req.addr + i) & 32'h3; // Fix: use 32'h3 for 32-bit width
+                        case (byte_offset)
+                            32'h0: data0[idx] <= req.vector_data[i*8 +: 8];
+                            32'h1: data1[idx] <= req.vector_data[i*8 +: 8];
+                            32'h2: data2[idx] <= req.vector_data[i*8 +: 8];
+                            32'h3: data3[idx] <= req.vector_data[i*8 +: 8];
+                        endcase
+                    end
+                end else begin
+                    rsp.valid <= 1'b0;
+                end
+            end
+            // Scalar (normal) access
+            else begin
+                if (is_any_byte32(req.do_read)) begin
+                    if (enable_rsp_addr)
+                        rsp.addr <= req.addr;
+                    rsp.valid <= 1'b1;
+                    rsp.user_tag <= req.user_tag;
+                    rsp.data[7:0]   <= data0[req.addr[size_l2 - 1:2]];
+                    rsp.data[15:8]  <= data1[req.addr[size_l2 - 1:2]];
+                    rsp.data[23:16] <= data2[req.addr[size_l2 - 1:2]];
+                    rsp.data[31:24] <= data3[req.addr[size_l2 - 1:2]];
+                end else if (is_any_byte32(req.do_write)) begin
+                    if (enable_rsp_addr)
+                        rsp.addr <= req.addr;
+                    rsp.valid <= 1'b1;
+                    rsp.user_tag <= req.user_tag;
+                    if (req.do_write[0]) data0[req.addr[size_l2 - 1:2]] <= req.data[7:0];
+                    if (req.do_write[1]) data1[req.addr[size_l2 - 1:2]] <= req.data[15:8];
+                    if (req.do_write[2]) data2[req.addr[size_l2 - 1:2]] <= req.data[23:16];
+                    if (req.do_write[3]) data3[req.addr[size_l2 - 1:2]] <= req.data[31:24];
+                end else begin
+                    rsp.valid <= 1'b0;
+                end
             end
         end
     end

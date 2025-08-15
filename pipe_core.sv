@@ -14,7 +14,13 @@ module core (
     output memory_io_req   inst_mem_req,
     input  memory_io_rsp   inst_mem_rsp,
     output memory_io_req   data_mem_req,
-    input  memory_io_rsp   data_mem_rsp);
+    input  memory_io_rsp   data_mem_rsp,
+    output logic        vec_inst_valid,
+    output logic [31:0] vec_inst,
+    output logic [31:0] rs1_data,
+    output logic [31:0] rs2_data,
+    input  logic        vec_ready,
+    input  logic [127:0] vec_result);
 
 
 // =========================
@@ -36,11 +42,13 @@ word       imm;           // Decoded immediate
 funct3     f3;            // Function 3 bits
 funct7     f7;            // Function 7 bits
 opcode_q   op_q;          // Instruction type opcode
+opcode op;
 instr_format format;      // Instruction format (R/I/S/etc.)
 bool       is_memory_op;
 word_address if_id_pc;
 instr32    if_id_instr;
 
+logic is_vector_op; 
 // ===========================
 // === ID/EX Pipeline Regs ===
 // ===========================
@@ -133,7 +141,14 @@ always_comb begin
     imm     = decode_imm(if_id_instr, format);
     wbv     = decode_writeback(op_q);
     f7      = decode_funct7(if_id_instr, format);
+    op = decode_opcode(if_id_instr);
+    is_vector_op = decode_vector_op(op);
+    vec_inst_valid = is_vector_op;
+    vec_inst       = if_id_instr;
+    rs1_data       = reg_file[rs1];
+    rs2_data       = reg_file[rs2];
 end
+
 
 always_ff @(posedge clk) begin
     if (reset) begin
@@ -254,8 +269,10 @@ end
 // =============================
 
 logic stall_pipeline;
+logic vector_stall;
 always_comb begin
-    stall_pipeline = ((id_ex_op_q == q_load) &&
+    vector_stall = is_vector_op && !vec_ready;
+    stall_pipeline = vector_stall || ((id_ex_op_q == q_load) &&
                     ((id_ex_wbs == rs1 && rs1 != 0) ||
                     (id_ex_wbs == rs2 && rs2 != 0)));
 end
@@ -411,12 +428,18 @@ always_ff @(posedge clk) begin
     end
     
     instruction_count <= instruction_count + 1;
-    
-    if (instruction_count == 1100) begin
-        //$display("----- Cycle %0t -----", $time);
-        //$finish;
+    /*
+    if (data_mem_req.valid && data_mem_req.addr == `word_address_size'h0002_FFFC &&
+        data_mem_req.do_write != {(`word_address_size/8){1'b0}}) begin
+        $display("Cycle count: %d\n", instruction_count);
     end
-    
+    */
+    /*
+    if (instruction_count == 1175) begin
+        //$display("----- Cycle %0t -----", $time);
+        $finish;
+    end
+    */
     
     if (data_mem_req.valid && !reset) begin
         $display("----- Cycle %0t -----", $time);

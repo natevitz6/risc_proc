@@ -143,12 +143,44 @@ always_comb begin
     f7      = decode_funct7(if_id_instr, format);
     op = decode_opcode(if_id_instr);
     is_vector_op = decode_vector_op(op);
-    vec_inst_valid = is_vector_op;
     vec_inst       = if_id_instr;
-    rs1_data       = reg_file[rs1];
-    rs2_data       = reg_file[rs2];
+
+    if (is_vector_op) begin
+        wbs = 0;
+        wbv = 0;
+    end
+
+    // Forwarding logic for rs1_data and rs2_data
+    if (is_vector_op && rs1 != 0 && rs1 == mem_wb_wbs && mem_wb_wbv)
+        rs1_data = wbd;
+    else
+        rs1_data = reg_file[rs1];
+
+    if (is_vector_op && rs2 != 0 && rs2 == mem_wb_wbs && mem_wb_wbv)
+        rs2_data = wbd;
+    else
+        rs2_data = reg_file[rs2];
 end
 
+logic latched_vec_inst_valid;
+logic vec_op_sent;
+always_ff @(posedge clk) begin
+    if (reset) begin
+        latched_vec_inst_valid <= 0;
+        vec_op_sent <= 0;
+    end else begin
+        if (is_vector_op && !vector_hazard && !vec_op_sent && !load_use) begin
+            latched_vec_inst_valid <= 1;
+            vec_op_sent <= 1;
+        end else if (vec_ready) begin
+            vec_op_sent <= 0;
+        end else begin
+            latched_vec_inst_valid <= 0;
+        end
+    end
+end
+
+assign vec_inst_valid = latched_vec_inst_valid;
 
 always_ff @(posedge clk) begin
     if (reset) begin
@@ -267,14 +299,31 @@ end
 // =============================
 // === Load-Use Hazard Stall ===
 // =============================
+logic vector_hazard;
+always_comb begin
+    vector_hazard = 0;
+    if (is_vector_op) begin
+        // EX stage hazard
+        if ((id_ex_wbs == rs1 && rs1 != 0 && id_ex_wbv) ||
+            (id_ex_wbs == rs2 && rs2 != 0 && id_ex_wbv)) begin
+            vector_hazard = 1;
+        end
+        // MEM stage hazard
+        if ((ex_mem_wbs == rs1 && rs1 != 0 && ex_mem_wbv) ||
+            (ex_mem_wbs == rs2 && rs2 != 0 && ex_mem_wbv)) begin
+            vector_hazard = 1;
+        end
+    end
+end
 
-logic stall_pipeline;
+logic stall_pipeline, load_use;
 logic vector_stall;
 always_comb begin
     vector_stall = is_vector_op && !vec_ready;
-    stall_pipeline = vector_stall || ((id_ex_op_q == q_load) &&
-                    ((id_ex_wbs == rs1 && rs1 != 0) ||
-                    (id_ex_wbs == rs2 && rs2 != 0)));
+    load_use = ((id_ex_op_q == q_load) &&
+                ((id_ex_wbs == rs1 && rs1 != 0) ||
+                (id_ex_wbs == rs2 && rs2 != 0)));
+    stall_pipeline = vector_hazard || vector_stall || load_use;
 end
 
 // =============================
@@ -435,11 +484,23 @@ always_ff @(posedge clk) begin
     end
     */
     /*
-    if (instruction_count == 1175) begin
+    if (instruction_count == 200) begin
         //$display("----- Cycle %0t -----", $time);
         $finish;
     end
-    */
+    
+
+    // Print when a vector instruction is detected in decode
+    if (!reset && vec_inst_valid) begin
+        $display("----- Cycle %0t -----", $time);
+        $display("[CORE] Vector instruction detected at PC=%08h: INSTR=%08h", if_id_pc, if_id_instr);
+    end
+
+    // Print when a vector instruction completes (when vec_ready is asserted)
+    if (!reset && vec_inst_valid && vec_ready) begin
+        $display("----- Cycle %0t -----", $time);
+        $display("[CORE] Vector instruction completed at PC=%08h: INSTR=%08h, result=%h", if_id_pc, if_id_instr, vec_result);
+    end
     
     if (data_mem_req.valid && !reset) begin
         $display("----- Cycle %0t -----", $time);
@@ -467,11 +528,11 @@ always_ff @(posedge clk) begin
         
         $display("IF  : PC = %08h | INSTR = %08h", pc, instruction_read);
 
-        $display("ID  : PC = %08h | INSTR = %08h | rs1 = x%0d = %08x | rs2 = x%0d = %08x | wbs = x%0d | imm = %0d | op_q = %0d",
+        $display("ID  : PC = %08h | INSTR = %08h | rs1 = x%0d = %08x | rs2 = x%0d = %08x | wbs = x%0d | imm = %0d | op_q = %0d | vec_op = %0d | vec_haz = %0d",
             if_id_pc, if_id_instr,
             rs1, reg_file[rs1],
             rs2, reg_file[rs2],
-            wbs, imm, op_q);
+            wbs, imm, op_q, is_vector_op, vector_hazard);
 
         $display("EX  : PC = %08h | INSTR = %08h | rs1 = x%0d = %08x | rs2 = x%0d = %08x | wbs = x%0d | imm = %0d | result = %08x | fwd_a = %0d | fwd_b = %0d",
             id_ex_pc, id_ex_instr,
@@ -506,11 +567,12 @@ always_ff @(posedge clk) begin
 
         $display("Control: mem_stall = %0d | mem_req_sent = %0d | branch_taken = %0d | jump_taken = %0d | stall_pipeline = %0d",
             mem_stall, mem_req_sent, branch_taken, jump_taken, stall_pipeline);
-        
+
+        $display("latched_vec_instr = %0d | vec_op_sent = %0d | vector_haz = %0d", latched_vec_inst_valid, vec_op_sent, vector_hazard);      
         $display("-------------------------------\n");   
         
     end   
-    
+    */
     
 end
 

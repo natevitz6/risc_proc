@@ -458,7 +458,7 @@ module assoc_cache #(
             end
 
 
-            /* Debug output
+            // Debug output
             //$display("[CACHE] Cycle %0t | State: %0d | core_rsp: valid=%0b addr=%08x data=%08x\n",
                 //$time, state, core_rsp_valid_q, core_rsp_addr_q, core_rsp_data_q);
             if (core_req.valid) begin
@@ -475,7 +475,7 @@ module assoc_cache #(
                     core_rsp_data_q
                 );
             end
-            */
+            
 
         end
     end
